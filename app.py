@@ -459,7 +459,7 @@ def funnel_chart(df: pd.DataFrame, title: str):
 
     fig.update_layout(
         title=title,
-        funnelmode="group",
+        funnelmode="stack",
         margin=dict(l=20, r=20, t=60, b=20),
         height=470,
         legend_title_text="Campaña",
