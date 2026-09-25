@@ -209,7 +209,16 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     # Variables temporales
     df["Dia"] = df["Fecha"].dt.date
     df["Mes"] = df["Fecha"].dt.to_period("M").astype(str)
-    df["Mes_Label"] = df["Fecha"].dt.strftime("%Y-%m")
+    month_map = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre",
+    }
+    df["Mes_Orden"] = df["Fecha"].dt.to_period("M").astype(str)
+    df["Mes_Label"] = df.apply(
+        lambda r: f"{month_map[r['Fecha'].month]} {r['Fecha'].year}",
+        axis=1,
+    )
     df["Semana"] = df["Fecha"].dt.to_period("W-MON").apply(
         lambda p: p.start_time.date()
     )
@@ -321,8 +330,8 @@ def funnel_table(df: pd.DataFrame) -> pd.DataFrame:
             "Volumen": m["Impresiones"],
             "Conv_etapa_anterior": 1.0,
             "Conv_acumulada_desde_impresion": 1.0,
-            "Metrica_Costo": "CPM",
-            "Costo": m["CPM"],
+            "Metrica_Costo": "—",
+            "Costo": np.nan,
         },
         {
             "Etapa": "Clics",
@@ -346,12 +355,12 @@ def funnel_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def monthly_funnel_table(df: pd.DataFrame) -> pd.DataFrame:
-    out = grouped_metrics(df, ["Mes_Label", "Campana"])
+    out = grouped_metrics(df, ["Mes_Orden", "Mes_Label", "Campana"])
     if out.empty:
         return out
 
     out = out.sort_values(
-        ["Mes_Label", "Campana"],
+        ["Mes_Orden", "Campana"],
         ascending=[False, True],
     )
 
@@ -369,12 +378,12 @@ def monthly_funnel_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def monthly_cost_table(df: pd.DataFrame) -> pd.DataFrame:
-    out = grouped_metrics(df, ["Mes_Label", "Campana"])
+    out = grouped_metrics(df, ["Mes_Orden", "Mes_Label", "Campana"])
     if out.empty:
         return out
 
     out = out.sort_values(
-        ["Mes_Label", "Campana"],
+        ["Mes_Orden", "Campana"],
         ascending=[False, True],
     )
 
@@ -382,7 +391,6 @@ def monthly_cost_table(df: pd.DataFrame) -> pd.DataFrame:
         "Mes_Label",
         "Campana",
         "Inversion",
-        "CPM",
         "CPC",
         "CPL",
     ]
@@ -417,27 +425,44 @@ def kpi_row(df: pd.DataFrame):
 
 
 def funnel_chart(df: pd.DataFrame, title: str):
-    ft = funnel_table(df)
+    fig = go.Figure()
 
-    fig = go.Figure(
-        go.Funnel(
-            y=ft["Etapa"],
-            x=ft["Volumen"],
-            textinfo="value+percent initial+percent previous",
-            hovertemplate=(
-                "<b>%{y}</b><br>"
-                "Volumen: %{x:,.0f}<br>"
-                "% del inicio: %{percentInitial:.2%}<br>"
-                "% etapa previa: %{percentPrevious:.2%}"
-                "<extra></extra>"
-            ),
-        )
+    campaigns = (
+        df["Campana"]
+        .dropna()
+        .astype(str)
+        .sort_values()
+        .unique()
+        .tolist()
     )
+
+    for campaign in campaigns:
+        campaign_df = df[df["Campana"].astype(str) == campaign]
+        ft = funnel_table(campaign_df)
+
+        fig.add_trace(
+            go.Funnel(
+                name=campaign,
+                y=ft["Etapa"],
+                x=ft["Volumen"],
+                textinfo="value+percent initial+percent previous",
+                hovertemplate=(
+                    f"<b>{campaign}</b><br>"
+                    "Etapa: %{y}<br>"
+                    "Volumen: %{x:,.0f}<br>"
+                    "% del inicio: %{percentInitial:.2%}<br>"
+                    "% etapa previa: %{percentPrevious:.2%}"
+                    "<extra></extra>"
+                ),
+            )
+        )
 
     fig.update_layout(
         title=title,
+        funnelmode="group",
         margin=dict(l=20, r=20, t=60, b=20),
-        height=430,
+        height=470,
+        legend_title_text="Campaña",
     )
 
     return fig
@@ -448,10 +473,9 @@ def cost_stage_chart(df: pd.DataFrame, title: str):
 
     c = pd.DataFrame(
         {
-            "Métrica": ["CPM", "CPC", "CPL"],
-            "Costo": [m["CPM"], m["CPC"], m["CPL"]],
+            "Métrica": ["CPC", "CPL"],
+            "Costo": [m["CPC"], m["CPL"]],
             "Significado": [
-                "Costo por 1,000 impresiones",
                 "Costo por clic",
                 "Costo por lead",
             ],
@@ -678,10 +702,6 @@ def period_summary(df: pd.DataFrame, label: str) -> dict:
 # ============================================================
 
 st.title("Google Ads Funnel EDA")
-st.caption(
-    "Funnel desde Impresiones → Clics → Leads. "
-    "Las tasas y costos se recalculan después de cada filtro."
-)
 
 raw_df = load_data()
 df = clean_data(raw_df)
@@ -767,38 +787,12 @@ tab1, tab2 = st.tabs(
 
 with tab1:
     st.subheader("1. Funnel Adwords")
-    st.caption(
-        "Vista operativa del funnel. El gráfico puede consolidar el periodo "
-        "seleccionado; las tablas inferiores siempre conservan el desglose mensual."
-    )
-
     kpi_row(filtered)
 
     st.divider()
 
-    campaign_options = (
-        filtered["Campana"]
-        .dropna()
-        .astype(str)
-        .sort_values()
-        .unique()
-        .tolist()
-    )
-
-    funnel_campaign = st.selectbox(
-        "Campaña para visualizar el funnel",
-        options=["Todas las campañas filtradas"] + campaign_options,
-        index=0,
-    )
-
-    if funnel_campaign == "Todas las campañas filtradas":
-        funnel_df = filtered.copy()
-        funnel_title = "Funnel — todas las campañas filtradas"
-    else:
-        funnel_df = filtered[
-            filtered["Campana"].astype(str) == funnel_campaign
-        ].copy()
-        funnel_title = f"Funnel — {funnel_campaign}"
+    funnel_df = filtered.copy()
+    funnel_title = "Funnel por campaña"
 
     col1, col2 = st.columns([1.2, 1])
 
@@ -859,6 +853,7 @@ with tab1:
 
     st.markdown("### Resumen por campaña")
     by_campaign = grouped_metrics(filtered, "Campana")
+    by_campaign = by_campaign.drop(columns=["CPM"], errors="ignore")
     by_campaign = by_campaign.sort_values(
         "Leads",
         ascending=False,
@@ -870,10 +865,6 @@ with tab1:
     )
 
     st.markdown("### Datos filtrados")
-    st.caption(
-        "Las columnas originales calculadas pueden seguir presentes, "
-        "pero los KPIs de esta app no dependen de ellas."
-    )
     st.dataframe(
         filtered.sort_values("Fecha", ascending=False),
         use_container_width=True,
